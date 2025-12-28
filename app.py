@@ -24,11 +24,14 @@ def mailgun_webhook():
     logging.info("Recipient: %s", request.form.get("recipient"))
 
     # Log body preview if present
-    body = request.form.get("body-plain")
-    if body:
-        logging.info("Body preview: %r", body[:200])
-    else:
-        logging.info("No body-plain field found")
+    recipient = request.form.get("recipient", "")
+
+    token = None
+    if recipient.startswith("reply+") and "@" in recipient:
+        token = recipient.split("reply+", 1)[1].split("@", 1)[0]
+
+    logging.info("Reply token: %s", token)
+
 
     # Log raw payload size (this is the key diagnostic)
     raw = request.get_data()
