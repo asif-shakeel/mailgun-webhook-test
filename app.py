@@ -28,6 +28,16 @@ supabase = create_client(
     os.environ["SUPABASE_SERVICE_KEY"],
 )
 
+def clean_body(text: str) -> str:
+    markers = [
+        "\nOn ",
+        "\nFrom:",
+        "\n>",
+    ]
+    for m in markers:
+        if m in text:
+            text = text.split(m, 1)[0]
+    return text.strip()
 
 # Configure logging so Render shows it
 logging.basicConfig(level=logging.INFO)
@@ -70,14 +80,30 @@ def mailgun_webhook():
     body = request.form.get("body-plain")
 
     if token and body:
-        campaign_id = TOKEN_CAMPAIGN_MAP.get(token)
+        row = (
+            supabase
+            .table("campaign_tokens")
+            .select("campaign_id")
+            .eq("token", token)
+            .single()
+            .execute()
+        )
+
+        campaign_id = row.data["campaign_id"] if row.data else None
+
+
+
+        body = clean_body(body)
+        message_id = request.form.get("Message-Id")
 
         supabase.table("replies").insert({
             "token": token,
             "body": body,
             "subject": subject,
             "campaign_id": campaign_id,
+            "message_id": message_id,
         }).execute()
+
 
 
 
@@ -121,7 +147,11 @@ def send_campaign_test():
         return {"error": "campaign_id and to_email required"}, 400
 
     token = os.urandom(8).hex()
-    TOKEN_CAMPAIGN_MAP[token] = campaign_id
+    supabase.table("campaign_tokens").insert({
+        "token": token,
+        "campaign_id": campaign_id,
+    }).execute()
+
 
     send_test_email(
         to_email=to_email,
