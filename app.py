@@ -4,7 +4,6 @@ import os
 from supabase import create_client
 import requests
 
-TOKEN_CAMPAIGN_MAP = {}
 
 def send_test_email(to_email: str, token: str):
     response = requests.post(
@@ -85,11 +84,12 @@ def mailgun_webhook():
             .table("campaign_tokens")
             .select("campaign_id")
             .eq("token", token)
-            .single()
+            .limit(1)
             .execute()
         )
 
-        campaign_id = row.data["campaign_id"] if row.data else None
+        campaign_id = row.data[0]["campaign_id"] if row.data else None
+
 
 
 
