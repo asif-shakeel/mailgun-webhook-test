@@ -1,10 +1,12 @@
-import logging
-from flask import Flask, request
 import os
-from supabase import create_client
+import logging
 import requests
+from flask import Flask, request, abort
+from supabase import create_client
 
-from flask import abort
+# --------------------------------------------------
+# Auth helpers
+# --------------------------------------------------
 
 def require_m():
     if request.headers.get("X-M-Key") != os.environ.get("M_API_KEY"):
@@ -15,15 +17,35 @@ def require_c():
         abort(403)
 
 def require_viewer():
-    m_key = request.headers.get("X-M-Key")
-    c_key = request.headers.get("X-C-Key")
-
     if (
-        m_key != os.environ.get("M_API_KEY")
-        and c_key != os.environ.get("C_API_KEY")
+        request.headers.get("X-M-Key") != os.environ.get("M_API_KEY")
+        and request.headers.get("X-C-Key") != os.environ.get("C_API_KEY")
     ):
         abort(403)
 
+# --------------------------------------------------
+# App + DB
+# --------------------------------------------------
+
+app = Flask(__name__)
+logging.basicConfig(level=logging.INFO)
+
+supabase = create_client(
+    os.environ["SUPABASE_URL"],
+    os.environ["SUPABASE_SERVICE_KEY"],
+)
+
+# --------------------------------------------------
+# Helpers
+# --------------------------------------------------
+
+def create_token_for_campaign(campaign_id: str) -> str:
+    token = os.urandom(8).hex()
+    supabase.table("campaign_tokens").insert({
+        "token": token,
+        "campaign_id": campaign_id,
+    }).execute()
+    return token
 
 def send_test_email(to_email: str, token: str):
     response = requests.post(
@@ -33,100 +55,86 @@ def send_test_email(to_email: str, token: str):
             "from": "Campaign <campaign@mg.renewableenergyx.com>",
             "to": to_email,
             "subject": "Test campaign email",
-            "text": "Hello!\n\nThis is a test campaign email.\n\nReply to this message.",
+            "text": (
+                "Hello!\n\n"
+                "This is a test campaign email.\n\n"
+                "Reply to this message."
+            ),
             "h:Reply-To": f"reply+{token}@mg.renewableenergyx.com",
         },
         timeout=10,
     )
-
     response.raise_for_status()
 
-app = Flask(__name__)
-supabase = create_client(
-    os.environ["SUPABASE_URL"],
-    os.environ["SUPABASE_SERVICE_KEY"],
-)
-
 def clean_body(text: str) -> str:
-    markers = [
-        "\nOn ",
-        "\nFrom:",
-        "\n>",
-    ]
-    for m in markers:
-        if m in text:
-            text = text.split(m, 1)[0]
+    for marker in ("\nOn ", "\nFrom:", "\n>"):
+        if marker in text:
+            text = text.split(marker, 1)[0]
     return text.strip()
 
-# Configure logging so Render shows it
-logging.basicConfig(level=logging.INFO)
+# --------------------------------------------------
+# Routes
+# --------------------------------------------------
 
 @app.route("/", methods=["GET"])
 def home():
     return "OK", 200
 
+# ------------------ Mailgun webhook ------------------
+
 @app.route("/mailgun", methods=["POST"])
 def mailgun_webhook():
-    logging.info("=== Mailgun webhook received ===")
+    logging.info("Mailgun webhook received")
 
-    # Log content type
-    logging.info("Content-Type: %s", request.content_type)
-
-    # Log form keys
-    logging.info("Form keys: %s", list(request.form.keys()))
-
-    # Log recipient
-    # logging.info("Recipient: %s", request.form.get("recipient"))
-
-    # Log body preview if present
     recipient = request.form.get("recipient", "")
-
     token = None
-    if recipient.startswith("reply+") and "@" in recipient:
-        token = recipient.split("reply+", 1)[1].split("@", 1)[0]
 
-    logging.info("Reply token: %s", token)
-
-
-    # Log raw payload size (this is the key diagnostic)
-    raw = request.get_data()
-    logging.info("Raw payload length: %d bytes", len(raw))
-
-    logging.info("=== End webhook ===")
-
+    if recipient.startswith("reply+"):
+        token = recipient.split("+", 1)[1].split("@", 1)[0]
 
     subject = request.form.get("subject")
     body = request.form.get("body-plain")
+    message_id = request.form.get("Message-Id")
 
-    if token and body:
-        row = (
-            supabase
-            .table("campaign_tokens")
-            .select("campaign_id")
-            .eq("token", token)
-            .limit(1)
-            .execute()
-        )
+    if not token or not body or not message_id:
+        return "OK", 200
 
-        campaign_id = row.data[0]["campaign_id"] if row.data else None
+    # Deduplicate by Message-Id
+    existing = (
+        supabase
+        .table("replies")
+        .select("id")
+        .eq("message_id", message_id)
+        .limit(1)
+        .execute()
+    )
 
+    if existing.data:
+        logging.info("Duplicate reply ignored")
+        return "OK", 200
 
+    row = (
+        supabase
+        .table("campaign_tokens")
+        .select("campaign_id")
+        .eq("token", token)
+        .limit(1)
+        .execute()
+    )
 
+    campaign_id = row.data[0]["campaign_id"] if row.data else None
 
-        body = clean_body(body)
-        message_id = request.form.get("Message-Id")
-
-        supabase.table("replies").insert({
-            "token": token,
-            "body": body,
-            "subject": subject,
-            "campaign_id": campaign_id,
-            "message_id": message_id,
-        }).execute()
-
-
+    supabase.table("replies").insert({
+        "token": token,
+        "campaign_id": campaign_id,
+        "subject": subject,
+        "body": clean_body(body),
+        "message_id": message_id,
+    }).execute()
 
     return "OK", 200
+
+# ------------------ Replies ------------------
 
 @app.route("/replies", methods=["GET"])
 def list_replies():
@@ -139,7 +147,20 @@ def list_replies():
         .limit(50)
         .execute()
     )
+    return res.data
 
+# ------------------ Campaigns ------------------
+
+@app.route("/campaigns", methods=["GET"])
+def list_campaigns():
+    require_m()
+    res = (
+        supabase
+        .table("campaigns")
+        .select("id, name, created_at")
+        .order("created_at", desc=True)
+        .execute()
+    )
     return res.data
 
 @app.route("/campaigns", methods=["POST"])
@@ -157,6 +178,8 @@ def create_campaign():
 
     return res.data[0]
 
+# ------------------ Send tests ------------------
+
 @app.route("/send-campaign-test", methods=["POST"])
 def send_campaign_test():
     data = request.get_json(force=True)
@@ -166,17 +189,8 @@ def send_campaign_test():
     if not campaign_id or not to_email:
         return {"error": "campaign_id and to_email required"}, 400
 
-    token = os.urandom(8).hex()
-    supabase.table("campaign_tokens").insert({
-        "token": token,
-        "campaign_id": campaign_id,
-    }).execute()
-
-
-    send_test_email(
-        to_email=to_email,
-        token=token,
-    )
+    token = create_token_for_campaign(campaign_id)
+    send_test_email(to_email, token)
 
     return {
         "status": "sent",
@@ -193,17 +207,6 @@ def tokenize_and_send(campaign_id):
     if not emails or not isinstance(emails, list):
         return {"error": "emails must be a list"}, 400
 
-
-    campaign = (
-        supabase
-        .table("campaigns")
-        .select("id")
-        .eq("id", campaign_id)
-        .single()
-        .execute()
-    )
-
-    # Safety limits (adjust later if needed)
     if len(emails) > 100:
         return {"error": "max 100 emails per request"}, 400
 
@@ -213,41 +216,15 @@ def tokenize_and_send(campaign_id):
         "failed": [],
     }
 
-
-    logging.info(
-        "Tokenizing and sending campaign %s to %d emails",
-        campaign_id,
-        len(emails),
-    )
-
     for email in emails:
         try:
-            token = os.urandom(8).hex()
-
-            # Store ONLY token -> campaign mapping
-            supabase.table("campaign_tokens").insert({
-                "token": token,
-                "campaign_id": campaign_id,
-            }).execute()
-
-            # Send the email
-            send_test_email(
-                to_email=email,
-                token=token,
-            )
-
-            # Return mapping to M (but do NOT store email)
+            token = create_token_for_campaign(campaign_id)
+            send_test_email(email, token)
             results["sent"].append({
                 "email": email,
                 "token": token,
             })
-
-        except Exception as e:
-            logging.warning(
-                "Failed to send to one email in campaign %s: %s",
-                campaign_id,
-                str(e),
-            )
+        except Exception:
             results["failed"].append({
                 "email": email,
                 "error": "send_failed",
@@ -255,8 +232,8 @@ def tokenize_and_send(campaign_id):
 
     return results, 200
 
+# --------------------------------------------------
 
 if __name__ == "__main__":
-    import os
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
