@@ -106,10 +106,7 @@ def mailgun_webhook():
 
 
 
-    return "fail", 500
-
-
-    # return "OK", 200
+    return "OK", 200
 
 @app.route("/replies", methods=["GET"])
 def list_replies():
