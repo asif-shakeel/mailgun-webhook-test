@@ -1,7 +1,14 @@
 import logging
 from flask import Flask, request
+import os
+from supabase import create_client
 
 app = Flask(__name__)
+supabase = create_client(
+    os.environ["SUPABASE_URL"],
+    os.environ["SUPABASE_SERVICE_KEY"],
+)
+
 
 # Configure logging so Render shows it
 logging.basicConfig(level=logging.INFO)
@@ -38,6 +45,20 @@ def mailgun_webhook():
     logging.info("Raw payload length: %d bytes", len(raw))
 
     logging.info("=== End webhook ===")
+
+
+    subject = request.form.get("subject")
+    body = request.form.get("body-plain")
+
+    if token and body:
+        supabase.table("replies").insert({
+            "token": token,
+            "body": body,
+            "subject": subject,
+        }).execute()
+
+
+
     return "OK", 200
 
 if __name__ == "__main__":
