@@ -66,24 +66,34 @@ def create_token_for_campaign(campaign_id: str) -> str:
     }).execute()
     return token
 
-def send_test_email(to_email: str, token: str):
+def send_email(campaign_id: str, to_email: str, token: str):
+    campaign = (
+        supabase
+        .table("campaigns")
+        .select("subject, body")
+        .eq("id", campaign_id)
+        .single()
+        .execute()
+    )
+
+    if not campaign.data or not campaign.data["subject"]:
+        raise Exception("Campaign content not set")
+
     response = requests.post(
         f"https://api.mailgun.net/v3/{os.environ['MAILGUN_DOMAIN']}/messages",
         auth=("api", os.environ["MAILGUN_API_KEY"]),
         data={
             "from": "Campaign <campaign@mg.renewableenergyx.com>",
             "to": to_email,
-            "subject": "Test campaign email",
-            "text": (
-                "Hello!\n\n"
-                "This is a test campaign email.\n\n"
-                "Reply to this message."
-            ),
+            "subject": campaign.data["subject"],
+            "text": campaign.data["body"],
             "h:Reply-To": f"reply+{token}@mg.renewableenergyx.com",
         },
         timeout=10,
     )
+
     response.raise_for_status()
+
 
 def clean_body(text: str) -> str:
     for marker in ("\nOn ", "\nFrom:", "\n>"):
@@ -177,7 +187,7 @@ def list_campaigns():
     res = (
         supabase
         .table("campaigns")
-        .select("id,name,created_at")
+        .select("id,name,created_at,subject,body")
         .order("created_at", desc=True)
         .execute()
     )
@@ -212,7 +222,8 @@ def send_campaign_test():
         return {"error": "campaign_id and to_email required"}, 400
 
     token = create_token_for_campaign(campaign_id)
-    send_test_email(to_email, token)
+    send_email(campaign_id, to_email, token)
+
 
     return {
         "status": "sent",
@@ -223,6 +234,18 @@ def send_campaign_test():
 @app.route("/campaigns/<campaign_id>/tokenize-and-send", methods=["POST"])
 def tokenize_and_send(campaign_id):
     require_m()
+    campaign = (
+        supabase
+        .table("campaigns")
+        .select("subject, body")
+        .eq("id", campaign_id)
+        .single()
+        .execute()
+    )
+
+    if not campaign.data or not campaign.data["subject"]:
+        return {"error": "campaign content not set by operator"}, 400
+
     data = request.get_json(force=True)
     emails = data.get("emails")
 
@@ -241,7 +264,7 @@ def tokenize_and_send(campaign_id):
     for email in emails:
         try:
             token = create_token_for_campaign(campaign_id)
-            send_test_email(email, token)
+            send_email(email, token)
             results["sent"].append({
                 "email": email,
                 "token": token,
@@ -254,6 +277,29 @@ def tokenize_and_send(campaign_id):
 
     return results, 200
 
+@app.route("/campaigns/<campaign_id>/content", methods=["POST"])
+def set_campaign_content(campaign_id):
+    require_c()
+
+    data = request.get_json(force=True)
+    subject = data.get("subject")
+    body = data.get("body")
+
+    if not subject or not body:
+        return {"error": "subject and body required"}, 400
+
+    res = (
+        supabase
+        .table("campaigns")
+        .update({
+            "subject": subject,
+            "body": body,
+        })
+        .eq("id", campaign_id)
+        .execute()
+    )
+
+    return {"status": "updated"}
 
 # --------------------------------------------------
 
