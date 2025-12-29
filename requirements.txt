@@ -3,3 +3,4 @@ supabase==1.0.3
 gotrue==1.0.4
 httpx==0.23.3
 flask-cors
+gunicorn
