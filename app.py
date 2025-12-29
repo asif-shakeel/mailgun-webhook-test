@@ -172,15 +172,18 @@ def list_replies():
 
 @app.route("/campaigns", methods=["GET"])
 def list_campaigns():
-    require_m()
+    require_viewer()  # allows M OR C
+
     res = (
         supabase
         .table("campaigns")
-        .select("id, name, created_at")
+        .select("id,name,created_at")
         .order("created_at", desc=True)
         .execute()
     )
+
     return res.data
+
 
 @app.route("/campaigns", methods=["POST"])
 def create_campaign():
@@ -250,6 +253,7 @@ def tokenize_and_send(campaign_id):
             })
 
     return results, 200
+
 
 # --------------------------------------------------
 
