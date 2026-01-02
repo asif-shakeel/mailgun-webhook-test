@@ -399,17 +399,33 @@ def send_campaign(cid):
 def clear_all_data():
     require_m()  # M-UI only
 
-    # Safety check (simple but effective)
     data = request.get_json(force=True) or {}
     if data.get("confirm") != "DELETE_ALL_DATA":
         return jsonify({"error": "confirmation required"}), 400
 
     # Delete in dependency order
-    supabase.table("replies").delete().neq("id", 0).execute()
-    supabase.table("campaign_recipients").delete().neq("id", 0).execute()
-    supabase.table("campaigns").delete().neq("id", "").execute()
+    supabase.table("replies") \
+        .delete() \
+        .gt("id", 0) \
+        .execute()
+
+    supabase.table("campaign_recipients") \
+        .delete() \
+        .gt("id", 0) \
+        .execute()
+
+    supabase.table("campaign_tokens") \
+        .delete() \
+        .gt("id", 0) \
+        .execute()
+
+    supabase.table("campaigns") \
+        .delete() \
+        .not_.is_("id", None) \
+        .execute()
 
     return jsonify({"status": "all data cleared"}), 200
+
 
 # ==================================================
 # Main
