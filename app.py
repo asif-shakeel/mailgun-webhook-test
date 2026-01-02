@@ -315,18 +315,26 @@ def upload_emails(cid):
     if not campaign:
         return jsonify({"error": "campaign not found"}), 404
 
-    inserted = 0
-
+    rows = []
     for email in emails:
-        token = secrets.token_hex(8)
-
-        supabase.table("campaign_recipients").insert({
+        rows.append({
             "campaign_id": cid,
             "email": email,
-            "token": token,
-        }).execute()
+            "token": secrets.token_hex(8),
+        })
 
-        inserted += 1
+    supabase.table("campaign_recipients") \
+        .upsert(
+            rows,
+            on_conflict="campaign_id,email",
+            ignore_duplicates=True
+        ) \
+        .execute()
+
+    return jsonify({
+        "uploaded": len(rows)
+    }), 200
+
 
     return jsonify({
         "uploaded": inserted
@@ -355,7 +363,7 @@ def send_campaign(cid):
         supabase.table("campaign_recipients")
         .select("*")
         .eq("campaign_id", cid)
-        .is_("sent_at", None)
+        .is_("sent_at", "null")
         .execute()
         .data
     )
@@ -384,13 +392,16 @@ def send_campaign(cid):
         except Exception:
             failed += 1
 
-    supabase.table("campaigns") \
-        .update({
-            "status": "sent",
-            "sent_at": datetime.utcnow().isoformat(),
-        }) \
-        .eq("id", cid) \
-        .execute()
+        new_status = "sent" if failed == 0 else "partial"
+
+        supabase.table("campaigns") \
+            .update({
+                "status": new_status,
+                "sent_at": datetime.utcnow().isoformat(),
+            }) \
+            .eq("id", cid) \
+            .execute()
+
 
     return jsonify({
         "sent": sent,
