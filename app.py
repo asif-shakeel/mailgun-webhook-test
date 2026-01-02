@@ -363,7 +363,7 @@ def send_campaign(cid):
         supabase.table("campaign_recipients")
         .select("*")
         .eq("campaign_id", cid)
-        .is_("sent_at", "null")
+        .is_("sent_at", None)
         .execute()
         .data
     )
@@ -377,10 +377,9 @@ def send_campaign(cid):
     for r in recipients:
         try:
             send_email(
-                to=r["email"],
-                subject=campaign["subject"],
-                body=campaign["body"],
-                token=r["token"],
+                r["email"],
+                campaign["subject"],
+                campaign["body"],
             )
 
             supabase.table("campaign_recipients") \
@@ -389,24 +388,25 @@ def send_campaign(cid):
                 .execute()
 
             sent += 1
-        except Exception:
+        except Exception as e:
+            app.logger.exception(f"Failed to send to {r['email']}")
             failed += 1
 
-        new_status = "sent" if failed == 0 else "partial"
+    new_status = "sent" if failed == 0 else "partial"
 
-        supabase.table("campaigns") \
-            .update({
-                "status": new_status,
-                "sent_at": datetime.utcnow().isoformat(),
-            }) \
-            .eq("id", cid) \
-            .execute()
-
+    supabase.table("campaigns") \
+        .update({
+            "status": new_status,
+            "sent_at": datetime.utcnow().isoformat(),
+        }) \
+        .eq("id", cid) \
+        .execute()
 
     return jsonify({
         "sent": sent,
         "failed": failed,
     }), 200
+
 
 # ------------------ Recipients CSV ------------------
 
