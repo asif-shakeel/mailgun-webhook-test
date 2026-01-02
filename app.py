@@ -297,48 +297,43 @@ def set_content(cid):
 def upload_emails(cid):
     require_m()
 
-    data = request.get_json(force=True)
-    emails = data.get("emails", [])
+    data = request.get_json(force=True) or {}
+    raw_emails = data.get("emails", [])
 
-    if not emails:
+    if not raw_emails:
         return jsonify({"error": "no emails provided"}), 400
 
-    campaign = (
-        supabase.table("campaigns")
-        .select("*")
-        .eq("id", cid)
-        .single()
-        .execute()
-        .data
-    )
+    # normalize + dedupe
+    cleaned = []
+    invalid = 0
+    for raw in raw_emails:
+        e = extract_email(str(raw))
+        if not e:
+            invalid += 1
+            continue
+        cleaned.append(e.lower())
 
-    if not campaign:
-        return jsonify({"error": "campaign not found"}), 404
+    cleaned = list(dict.fromkeys(cleaned))  # preserve order, dedupe
 
-    rows = []
-    for email in emails:
-        rows.append({
-            "campaign_id": cid,
-            "email": email,
-            "token": secrets.token_hex(8),
-        })
+    if not cleaned:
+        return jsonify({"error": "no valid emails found"}), 400
 
-    supabase.table("campaign_recipients") \
-        .upsert(
-            rows,
-            on_conflict="campaign_id,email",
-            ignore_duplicates=True
-        ) \
-        .execute()
+    rows = [
+        {"campaign_id": cid, "email": e, "token": gen_token()}
+        for e in cleaned
+    ]
+
+    supabase.table("campaign_recipients").upsert(
+        rows,
+        on_conflict="campaign_id,email",
+    ).execute()
 
     return jsonify({
-        "uploaded": len(rows)
+        "submitted": len(raw_emails),
+        "valid": len(cleaned),
+        "invalid": invalid
     }), 200
 
-
-    return jsonify({
-        "uploaded": inserted
-    }), 200
 
 @app.route("/campaigns/<cid>/send", methods=["POST"])
 def send_campaign(cid):
