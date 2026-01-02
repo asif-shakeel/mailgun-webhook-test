@@ -363,10 +363,12 @@ def send_campaign(cid):
         supabase.table("campaign_recipients")
         .select("*")
         .eq("campaign_id", cid)
-        .eq("sent_at", None)   # ✅ THIS IS THE FIX
         .execute()
         .data
     )
+
+    # ✅ Filter unsent recipients in Python
+    recipients = [r for r in recipients if r["sent_at"] is None]
 
 
     if not recipients:
@@ -375,6 +377,7 @@ def send_campaign(cid):
     sent = 0
     failed = 0
 
+    now = datetime.now(timezone.utc).isoformat()
     for r in recipients:
         try:
             send_email(
@@ -383,10 +386,12 @@ def send_campaign(cid):
                 campaign["body"],
             )
 
+
             supabase.table("campaign_recipients") \
-                .update({"sent_at": datetime.utcnow().isoformat()}) \
+                .update({"sent_at": now}) \
                 .eq("id", r["id"]) \
                 .execute()
+
 
             sent += 1
         except Exception as e:
@@ -398,10 +403,11 @@ def send_campaign(cid):
     supabase.table("campaigns") \
         .update({
             "status": new_status,
-            "sent_at": datetime.utcnow().isoformat(),
+            "sent_at": now,
         }) \
         .eq("id", cid) \
         .execute()
+
 
     return jsonify({
         "sent": sent,
